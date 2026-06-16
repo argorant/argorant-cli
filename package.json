@@ -1,0 +1,32 @@
+{
+  "name": "argorant",
+  "version": "0.2.0",
+  "description": "Search, count, reveal, and export verified B2B contacts from the Argorant database \u2014 from your terminal, scripts, or coding agent.",
+  "bin": {
+    "argorant": "bin/argorant.js"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "keywords": [
+    "argorant",
+    "b2b",
+    "leads",
+    "prospecting",
+    "email-verification",
+    "sales",
+    "contacts",
+    "cli"
+  ],
+  "homepage": "https://argorant.com/docs/cli",
+  "repository": {
+    "type": "git",
+    "url": "https://argorant.com/docs/cli"
+  },
+  "license": "MIT"
+}
