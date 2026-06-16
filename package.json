@@ -1,7 +1,7 @@
 {
   "name": "argorant",
-  "version": "0.2.0",
-  "description": "Search, count, reveal, and export verified B2B contacts from the Argorant database \u2014 from your terminal, scripts, or coding agent.",
+  "version": "0.3.0",
+  "description": "Search, count, reveal, export, and verify B2B contacts from the Argorant database \u2014 from your terminal, scripts, or coding agent.",
   "bin": {
     "argorant": "bin/argorant.js"
   },

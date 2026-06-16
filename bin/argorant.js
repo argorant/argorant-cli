@@ -2,7 +2,7 @@
 "use strict";
 
 // Argorant CLI — a thin, dependency-free wrapper over the Argorant REST API.
-// Search, count, reveal, and export verified B2B contacts from the terminal.
+// Search, count, reveal, export, and verify B2B contacts from the terminal.
 // Auth: an Argorant API key (ag_live_*) via `argorant login`, or ARGORANT_API_KEY.
 
 const https = require("https");
@@ -66,7 +66,6 @@ const VALUE_FLAGS = {
   "--city": "city",
   "--company": "company_name",
   "--domain": "company_domain",
-  "--verify-status": "verify_status",
 };
 // Boolean filter flags (presence => "true").
 const BOOL_FLAGS = {
@@ -76,13 +75,15 @@ const BOOL_FLAGS = {
 };
 
 function parseArgs(argv) {
-  const out = { _: [], filters: {}, limit: null, output: null, json: false, yes: false, base: DEFAULT_BASE };
+  const out = { _: [], filters: {}, limit: null, output: null, file: null, column: null, json: false, yes: false, base: DEFAULT_BASE };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") out.json = true;
     else if (a === "--yes" || a === "-y") out.yes = true;
     else if (a === "-n" || a === "--limit") out.limit = parseInt(argv[++i], 10);
     else if (a === "-o" || a === "--output") out.output = argv[++i];
+    else if (a === "-f" || a === "--file") out.file = argv[++i];
+    else if (a === "--column") out.column = argv[++i];
     else if (a === "--base") out.base = argv[++i];
     else if (a in VALUE_FLAGS) out.filters[VALUE_FLAGS[a]] = argv[++i];
     else if (a in BOOL_FLAGS) out.filters[BOOL_FLAGS[a]] = "true";
@@ -344,6 +345,70 @@ async function cmdExport(args) {
   console.log(green("✓") + ` Saved ${rows != null ? bold(rows.toLocaleString()) + " rows → " : ""}${bold(dest)}`);
 }
 
+// ---- verify: external email verification (own lists) — the verification pool,
+// separate from contact credits. 60-day re-checks are free. ----
+const EMAIL_RE = /[^\s,;"']+@[^\s,;"']+\.[^\s,;"']+/;
+
+async function cmdVerify(args) {
+  const key = requireKey();
+  if (args.file) return cmdVerifyFile(args, key);
+  const email = (args._[0] || args.filters.q || "").trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    die('usage: argorant verify <email>   |   argorant verify --file emails.csv [-o out.csv]');
+  }
+  const res = await request("POST", args.base, "/api/mcp/email/verify", { key, body: { email } });
+  const r = need(res, "verify");
+  if (args.json) return console.log(JSON.stringify(r, null, 2));
+  const tag = r.deliverable ? green(r.status) : dim(r.status);
+  console.log(`  ${bold(email)}  →  ${tag}${r.deliverable ? "  " + green("✓ deliverable") : ""}`);
+}
+
+async function cmdVerifyFile(args, key) {
+  let text;
+  try { text = fs.readFileSync(args.file, "utf8"); } catch { die(`cannot read file: ${args.file}`); }
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) die("file is empty");
+  // Use the named/auto-detected email column if the file looks like a CSV with a
+  // header; otherwise scan every line for an address.
+  const header = lines[0].split(",").map((h) => h.trim().toLowerCase().replace(/^["']|["']$/g, ""));
+  const colIdx = args.column
+    ? header.indexOf(args.column.toLowerCase())
+    : header.findIndex((h) => h === "email" || h.includes("email"));
+  let emails = [];
+  if (colIdx >= 0) {
+    for (let i = 1; i < lines.length; i++) {
+      const m = (lines[i].split(",")[colIdx] || "").match(EMAIL_RE);
+      if (m) emails.push(m[0].toLowerCase());
+    }
+  } else {
+    for (const l of lines) { const m = l.match(EMAIL_RE); if (m) emails.push(m[0].toLowerCase()); }
+  }
+  emails = [...new Set(emails)];
+  if (!emails.length) die("no email addresses found in file (try --column <name>)");
+  const out = args.output || "argorant-verified.csv";
+  if (!args.yes && !args.json && process.stdin.isTTY) {
+    const ans = await prompt(`Verify ${bold(emails.length.toLocaleString())} emails? Fresh checks use your verification-check pool; addresses checked in the last 60 days are free. [y/N] `);
+    if (!/^y(es)?$/i.test(ans)) return console.log(dim("aborted."));
+  }
+  const all = [];
+  let charged = 0, cached = 0;
+  for (let i = 0; i < emails.length; i += 500) {
+    const chunk = emails.slice(i, i + 500);
+    const res = await request("POST", args.base, "/api/mcp/email/verify/batch", { key, body: { emails: chunk } });
+    const r = need(res, "verify");
+    charged += r.checks_charged || 0;
+    cached += r.cached || 0;
+    for (const row of r.results || []) all.push(row);
+    if (!args.json) process.stdout.write(`\r${dim(`verified ${Math.min(i + 500, emails.length).toLocaleString()}/${emails.length.toLocaleString()}`)}`);
+  }
+  if (!args.json) process.stdout.write("\n");
+  if (args.json) return console.log(JSON.stringify({ ok: true, total: all.length, checks_charged: charged, cached, results: all }, null, 2));
+  const csv = ["email,status,deliverable", ...all.map((r) => `${r.email},${r.status},${r.deliverable}`)].join("\n") + "\n";
+  fs.writeFileSync(out, csv);
+  const deliverable = all.filter((r) => r.deliverable).length;
+  console.log(green("✓") + ` ${bold(all.length.toLocaleString())} verified → ${bold(out)}  ${dim(`(${deliverable.toLocaleString()} deliverable · ${charged.toLocaleString()} checks billed · ${cached.toLocaleString()} free cache hits)`)}`);
+}
+
 function help() {
   const p = bold("argorant");
   console.log(`
@@ -357,13 +422,15 @@ ${bold("COMMANDS")}
   ${cyan("whoami")}                     Account, scopes, and daily quota
   ${cyan("count")} "<query>"            Count matching contacts        ${dim("(free)")}
   ${cyan("search")} "<query>" -n 10     Preview matches, details redacted ${dim("(free)")}
-  ${cyan("reveal")} "<query>" -n 25     Reveal full contact details    ${dim("(uses quota)")}
-  ${cyan("export")} "<query>" -n 1000 -o leads.csv   Verified CSV export ${dim("(uses quota)")}
+  ${cyan("reveal")} "<query>" -n 25     Reveal full contact details    ${dim("(uses credits; live-verified, pay only for deliverable)")}
+  ${cyan("export")} "<query>" -n 1000 -o leads.csv   Verified CSV export ${dim("(uses credits)")}
+  ${cyan("verify")} <email>             Verify one of your own emails  ${dim("(verification pool)")}
+  ${cyan("verify")} --file emails.csv -o out.csv      Bulk-verify your own list ${dim("(60-day re-checks free)")}
 
 ${bold("FILTERS")}
   --title <t>        --exclude-title <t>  --seniority <s>    --department <d>
   --industry <i>     --country <c>        --geography <r>    --state <s>
-  --city <c>         --company <name>     --domain <domain>  --verify-status <v>
+  --city <c>         --company <name>     --domain <domain>
   --has-phone        --has-linkedin       --has-email
   ${dim("--title is abbreviation-aware (CFO ↔ Chief Financial Officer).")}
   ${dim("--country / --geography accept regions: Europe, EMEA, DACH, Nordics, APAC, LATAM, GCC…")}
@@ -377,6 +444,8 @@ ${bold("EXAMPLES")}
   ${p} count "fintech CFOs in germany"
   ${p} search "heads of procurement" --country Germany -n 10
   ${p} export --industry fintech --title CFO --country Germany -n 500 -o cfos.csv
+  ${p} verify ceo@stripe.com
+  ${p} verify --file my-list.csv -o verified.csv
 
   Docs: ${cyan("https://argorant.com/docs/cli")}
 `);
@@ -400,6 +469,7 @@ async function main() {
     search: cmdSearch,
     reveal: cmdReveal,
     export: cmdExport,
+    verify: cmdVerify,
   };
   const fn = table[cmd];
   if (!fn) die(`unknown command: ${cmd}\nRun \`argorant help\` for usage.`);
