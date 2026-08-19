@@ -1,7 +1,7 @@
 {
   "name": "argorant",
-  "version": "0.3.0",
-  "description": "Search, count, reveal, export, and verify B2B contacts from the Argorant database \u2014 from your terminal, scripts, or coding agent.",
+  "version": "0.5.0",
+  "description": "Search, count, reveal, export, and verify B2B contacts from the Argorant database — from your terminal, scripts, or coding agent.",
   "bin": {
     "argorant": "bin/argorant.js"
   },
@@ -26,7 +26,13 @@
   "homepage": "https://argorant.com/docs/cli",
   "repository": {
     "type": "git",
+    "url": "git+https://github.com/argorant/argorant-cli.git"
+  },
+  "license": "MIT",
+  "bugs": {
     "url": "https://argorant.com/docs/cli"
   },
-  "license": "MIT"
+  "scripts": {
+    "prepublishOnly": "node scripts/prepublish-guard.js"
+  }
 }
